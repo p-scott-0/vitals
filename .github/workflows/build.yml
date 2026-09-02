@@ -1,0 +1,77 @@
+name: Build Vitals
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      # Tag pushes take the version from the tag (v1.2.3 -> 1.2.3); main builds use the csproj <Version>.
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          if ("${{ github.ref }}" -like "refs/tags/v*") {
+            $v = "${{ github.ref_name }}".TrimStart("v")
+          } else {
+            $v = ([xml](Get-Content src/Vitals.App/Vitals.App.csproj)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+          }
+          "version=$v" >> $env:GITHUB_OUTPUT
+          "Version: $v"
+
+      # Self-contained single-file exe: no .NET runtime needed on the target machine.
+      - name: Publish Vitals.exe
+        run: >
+          dotnet publish src/Vitals.App/Vitals.App.csproj -c Release -r win-x64 --self-contained
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true
+          -p:Version=${{ steps.ver.outputs.version }} -o publish
+
+      - name: Check output
+        shell: pwsh
+        run: |
+          Get-ChildItem publish
+          if (-not (Test-Path publish/Vitals.exe)) { throw "Vitals.exe missing from publish output" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Vitals
+          path: publish/Vitals.exe
+
+      # Every push to main -> overwrite the rolling "latest" release, so the download link never changes.
+      - name: Update latest release
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          gh release delete latest --yes 2>$null
+          git push --delete origin latest 2>$null
+          gh release create latest publish/Vitals.exe `
+            --title "Vitals v$v" `
+            --notes "Most recent build (v$v). Download Vitals.exe and run it - standalone, no install or .NET runtime needed. It asks for admin on launch, which is required to read the CPU and motherboard sensors."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Push a version tag (e.g. v1.1.0) -> also create a named versioned release.
+      - name: Create versioned release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: publish/Vitals.exe
+          name: Vitals ${{ github.ref_name }}
+          body: |
+            ## Vitals ${{ github.ref_name }}
+            Download **Vitals.exe** below - standalone, no install or .NET runtime needed.
+            It asks for admin on launch, which is required to read the CPU and motherboard sensors.

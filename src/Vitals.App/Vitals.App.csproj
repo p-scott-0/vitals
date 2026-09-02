@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>Vitals</AssemblyName>
+    <RootNamespace>Vitals.App</RootNamespace>
+    <ApplicationIcon>Assets\vitals.ico</ApplicationIcon>
+    <!-- release builds override this from the git tag (v1.2.3 -> 1.2.3) -->
+    <Version>1.0.0</Version>
+    <Product>Vitals</Product>
+    <Description>System vitals dashboard: temperatures, fans, FPS, overlay.</Description>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- the WinForms SDK injects these as global usings, which collide with WPF types -->
+    <Using Remove="System.Drawing" />
+    <Using Remove="System.Windows.Forms" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Vitals.Core\Vitals.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Intel PresentMon (MIT) is embedded and unpacked to %LOCALAPPDATA%\Vitals on first run,
+         so the published single-file exe is genuinely standalone -->
+    <EmbeddedResource Include="..\..\tools\presentmon\PresentMon.exe"
+                      LogicalName="PresentMon.exe"
+                      Condition="Exists('..\..\tools\presentmon\PresentMon.exe')" />
+  </ItemGroup>
+
+</Project>
