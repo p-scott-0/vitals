@@ -68,6 +68,13 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        if (e.Args.Any(a => string.Equals(a, "--install", StringComparison.OrdinalIgnoreCase)))
+        {
+            RunInstaller();
+            Shutdown();
+            return;
+        }
+
         _mutex = new Mutex(true, MutexName, out bool createdNew);
         if (!createdNew)
         {
@@ -248,14 +255,30 @@ public partial class App : Application
         if (tracked?.Value is not double v)
             return new OverlayValue(group, label, "--", null);
 
-        string valueText = role switch
+        string valueText;
+        if (role.StartsWith("fan."))
         {
-            _ when role.StartsWith("fan.") => Math.Round(v).ToString(),
-            "gpu.power" => Math.Round(v) + " W",
-            "cpu.clock" => (v / 1000).ToString("0.0") + " GHz",
-            _ when role.EndsWith(".load") => Math.Round(v) + "%",
-            _ => Math.Round(v) + "°",
-        };
+            // fan roles resolve to the RPM sensor; its duty-% twin sits at the same index under /control/
+            string rpm = Math.Round(v).ToString();
+            double? pct = Hub.Get(tracked.Info.Id.Replace("/fan/", "/control/"))?.Value;
+            string? pctText = pct.HasValue ? Math.Round(pct.Value) + "%" : null;
+            valueText = Settings.OverlayFanMode switch
+            {
+                "pct" => pctText ?? rpm,
+                "both" => pctText != null ? $"{rpm} · {pctText}" : rpm,
+                _ => rpm,
+            };
+        }
+        else
+        {
+            valueText = role switch
+            {
+                "gpu.power" => Math.Round(v) + " W",
+                "cpu.clock" => (v / 1000).ToString("0.0") + " GHz",
+                _ when role.EndsWith(".load") => Math.Round(v) + "%",
+                _ => Math.Round(v) + "°",
+            };
+        }
         return new OverlayValue(group, label, valueText, ZoneBrush(role, v));
     }
 
@@ -437,6 +460,69 @@ public partial class App : Application
 
         new Thread(() => { Thread.Sleep(3000); Environment.Exit(0); }) { IsBackground = true }.Start();
         Shutdown();
+    }
+
+    // ---- "Vitals.exe --install" ----------------------------------------------
+
+    /// <summary>
+    /// Copies this exe to %LOCALAPPDATA%\Programs\Vitals, refreshes the Start Menu shortcut, and
+    /// launches the installed copy, which takes over from any running instance. This process is
+    /// already elevated, so the launched copy inherits that: one UAC prompt for the whole update.
+    /// </summary>
+    private static void RunInstaller()
+    {
+        try
+        {
+            string src = Environment.ProcessPath ?? throw new InvalidOperationException("Cannot determine the exe path.");
+            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Vitals");
+            string dst = Path.Combine(dir, "Vitals.exe");
+            bool alreadyInstalled = string.Equals(Path.GetFullPath(src), Path.GetFullPath(dst), StringComparison.OrdinalIgnoreCase);
+
+            if (!alreadyInstalled)
+            {
+                // ask the running instance to exit so its exe is no longer locked
+                try
+                {
+                    if (EventWaitHandle.TryOpenExisting(ExitEventName, out var running))
+                    {
+                        running.Set();
+                        running.Dispose();
+                    }
+                }
+                catch { }
+
+                Directory.CreateDirectory(dir);
+                IOException? lastError = null;
+                for (int i = 0; i < 80; i++)
+                {
+                    try { File.Copy(src, dst, overwrite: true); lastError = null; break; }
+                    catch (IOException ex) { lastError = ex; Thread.Sleep(250); }
+                }
+                if (lastError != null) throw lastError;
+            }
+
+            string lnk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs", "Vitals.lnk");
+            var shellType = Type.GetTypeFromProgID("WScript.Shell");
+            if (shellType != null)
+            {
+                dynamic shell = Activator.CreateInstance(shellType)!;
+                dynamic shortcut = shell.CreateShortcut(lnk);
+                shortcut.TargetPath = dst;
+                shortcut.WorkingDirectory = dir;
+                shortcut.IconLocation = dst + ",0";
+                shortcut.Description = "Vitals - system monitor";
+                shortcut.Save();
+            }
+
+            if (alreadyInstalled)
+                MessageBox.Show("Vitals is already installed here. Start Menu shortcut refreshed.", "Vitals");
+            else
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dst) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("Install failed:\n\n" + ex.Message, "Vitals", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     // ---- start-with-Windows (elevated scheduled task, avoids a UAC at logon) ----

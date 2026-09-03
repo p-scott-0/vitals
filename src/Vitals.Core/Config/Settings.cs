@@ -33,6 +33,8 @@ public sealed class VitalsSettings
     public string OverlayValueColor { get; set; } = "#E8ECF4";
     public string OverlayBackgroundColor { get; set; } = "#0F1216";
     public string TimeFormat { get; set; } = "HH:mm";
+    /// <summary>How FANS group entries read on the overlay: "rpm", "pct" (duty %), or "both".</summary>
+    public string OverlayFanMode { get; set; } = "rpm";
 
     /// <summary>Metric roles shown on the overlay (grouped automatically by prefix).</summary>
     public List<string> OverlayMetrics { get; set; } =

@@ -10,6 +10,12 @@ A system vitals dashboard for Windows gaming PCs: temperature gauges, fan speeds
 
 Grab **Vitals.exe** from the [latest release](../../releases/latest) and run it. It's a standalone single file — no installer, no .NET runtime to install. Windows will ask for admin rights on launch: that's required to read CPU and motherboard sensors (FanControl and HWiNFO need the same).
 
+To install (or update) it properly, run it once with `--install`: it copies itself to `%LOCALAPPDATA%\Programs\Vitals`, adds a Start Menu shortcut, and hands over from any running copy — one UAC prompt for the whole thing.
+
+```
+Vitals.exe --install
+```
+
 Tick **Start with Windows** in Settings to have it launch at logon without a UAC prompt (it registers an elevated scheduled task).
 
 ## What it shows
@@ -18,7 +24,7 @@ Tick **Start with Windows** in Settings to have it launch at logon without a UAC
 - **Fans** — RPM and duty % for every board header and GPU fan; hide unused headers and rename fans in Settings.
 - **System tiles** — CPU/GPU load, GPU power, RAM, system temp, SSD temp.
 - **History charts** — temperatures, fan speeds and FPS over a configurable 1–60 minute window.
-- **Overlay** — Razer Cortex–style strip (or vertical stack) grouping metrics under FPS / CPU / GPU / RAM / BOARD / FANS / NET / PLAY / TIME. Configurable metrics, clock format, header/value/background colours, background opacity, scale (drag the corner), and position (drag it). Click-through when locked. Renders over borderless/windowed fullscreen games.
+- **Overlay** — Razer Cortex–style strip (or vertical stack) grouping metrics under FPS / CPU / GPU / RAM / BOARD / FANS / NET / PLAY / TIME. Configurable metrics, fan readout (RPM, duty %, or both), clock format, header/value/background colours, background opacity, scale (drag the corner), and position (drag it). Click-through when locked. Renders over borderless/windowed fullscreen games.
 - **FPS** — via Intel [PresentMon](https://github.com/GameTechDev/PresentMon) (passive ETW frame telemetry, no game injection). Auto-attaches to the foreground game, shows live FPS, and logs each session (per-second FPS, average, 1 % lows) to `%APPDATA%\Vitals\logs\`.
 
 Settings live in `%APPDATA%\Vitals\settings.json`.

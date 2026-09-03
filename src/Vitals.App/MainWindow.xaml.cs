@@ -369,6 +369,10 @@ public partial class MainWindow : Window
             () => _app.Settings.OverlayHorizontal,
             v => { _app.Settings.OverlayHorizontal = v; _app.SaveSettings(); _app.RefreshOverlayConfig(); });
 
+        BuildChips(FanModeChips, new (string, string)[] { ("RPM", "rpm"), ("Duty %", "pct"), ("RPM + %", "both") },
+            () => _app.Settings.OverlayFanMode,
+            v => { _app.Settings.OverlayFanMode = v; _app.SaveSettings(); _app.RefreshOverlayConfig(); });
+
         BuildChips(TimeChips, new (string, string)[] { ("24h", "HH:mm"), ("24h + sec", "HH:mm:ss"), ("12h", "h:mm tt"), ("12h + sec", "h:mm:ss tt") },
             () => _app.Settings.TimeFormat,
             v => { _app.Settings.TimeFormat = v; _app.SaveSettings(); _app.RefreshOverlayConfig(); });

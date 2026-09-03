@@ -204,6 +204,8 @@
                               Style="{StaticResource SettingCheck}" Checked="OnLockChanged" Unchecked="OnLockChanged"/>
                     <TextBlock Text="Layout" Style="{StaticResource SettingLabel}"/>
                     <StackPanel x:Name="LayoutChips" Orientation="Horizontal"/>
+                    <TextBlock Text="Fan readout" Style="{StaticResource SettingLabel}"/>
+                    <StackPanel x:Name="FanModeChips" Orientation="Horizontal"/>
                     <TextBlock Text="Metrics" Style="{StaticResource SettingLabel}"/>
                     <WrapPanel x:Name="MetricChecks"/>
                     <TextBlock Text="Clock format" Style="{StaticResource SettingLabel}"/>
