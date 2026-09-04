@@ -1,18 +1,24 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 
 namespace Vitals.Core.Fps;
 
 /// <summary>
 /// FPS capture via Intel PresentMon (console build): passive ETW frame telemetry, no game
-/// injection. Watches the foreground process and attaches PresentMon to it; aggregates
-/// frame times into a once-per-second FPS reading and optionally logs sessions to CSV.
-/// Requires admin (ETW), which Vitals already runs as.
+/// injection. Requires admin (ETW), which Vitals already runs as.
+///
+/// Two layers:
+///  - Capture: PresentMon is attached to the foreground process (ignoring shells, browsers,
+///    launchers, chat apps) and its frame times are aggregated into a per-second FPS reading.
+///  - Game session: a captured process is promoted to "the game" when it looks like one —
+///    borderless/fullscreen window, a game-library install path, a known name, or two minutes of
+///    sustained FPS (which learns the name for next time). Once a game is tracked, alt-tabbing to
+///    anything else changes nothing: capture and playtime stay with the game until it exits.
 ///
 /// Threading rules: the lock only ever guards field updates — never process start/kill,
-/// file I/O, or sorting — and both timers skip a tick if the previous one is still running,
-/// so nothing here can pile up threadpool threads.
+/// file I/O, or sorting — and both timers skip a tick if the previous one is still running.
 /// </summary>
 public sealed class FpsService : IDisposable
 {
@@ -22,12 +28,51 @@ public sealed class FpsService : IDisposable
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
 
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO info);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLong")]
+    private static extern int GetWindowLong32(IntPtr hWnd, int index);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int Left, Top, Right, Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MONITORINFO { public int cbSize; public RECT rcMonitor, rcWork; public int dwFlags; }
+
+    private const int GwlStyle = -16;
+    private const int WsCaption = 0x00C00000;
+    private const int LearnSecondsNeeded = 120;
+    private const double LearnMinFps = 25;
+
     private static readonly HashSet<string> IgnoredProcesses = new(StringComparer.OrdinalIgnoreCase)
     {
-        "explorer", "dwm", "searchhost", "searchapp", "startmenuexperiencehost",
-        "shellexperiencehost", "textinputhost", "lockapp", "taskmgr", "systemsettings",
-        "vitals", "vitals.app", "vitals.probe", "fancontrol", "hwinfo64",
+        // shell / system
+        "explorer", "dwm", "searchhost", "searchapp", "startmenuexperiencehost", "shellexperiencehost",
+        "textinputhost", "lockapp", "taskmgr", "systemsettings", "applicationframehost", "runtimebroker",
+        // ourselves + other monitoring tools
+        "vitals", "vitals.app", "vitals.probe", "fancontrol", "hwinfo64", "msiafterburner", "rtss",
+        // browsers, chat and media: present frames constantly but are never the game
+        "chrome", "msedge", "firefox", "opera", "brave", "vivaldi", "discord", "slack", "teams", "ms-teams",
+        "spotify", "vlc", "mpc-hc64", "mpc-hc", "mpv", "wmplayer", "video.ui", "netflix",
+        // launchers and store clients
+        "steam", "steamwebhelper", "epicgameslauncher", "galaxyclient", "upc", "ubisoftconnect", "battle.net",
+        "origin", "eadesktop", "riotclientservices", "riotclientux", "gamebar", "xboxapp", "xboxpcapp",
+        // dev tools / terminals / misc desktop apps
+        "code", "devenv", "rider64", "windowsterminal", "cmd", "powershell", "pwsh", "conhost",
+        "notepad", "notepad++", "obs64",
     };
+
+    /// <summary>Install folders that mark an exe as a game regardless of how its window looks.</summary>
+    private static readonly Regex GameLibraryPath = new(
+        @"[\\/](steamapps[\\/]common|Epic Games|GOG Galaxy[\\/]Games|GOG Games|XboxGames|Ubisoft Game Launcher[\\/]games|EA Games|Origin Games|Riot Games|Games)[\\/]",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private readonly string _presentMonPath;
     private readonly string _logDir;
@@ -37,36 +82,55 @@ public sealed class FpsService : IDisposable
     private int _foregroundBusy;
     private int _aggregateBusy;
 
+    // capture
     private Process? _proc;
     private int _targetPid;
     private string _targetName = "";
     private int _candidatePid;
     private int _candidateSeen;
     private int _frameTimeColumn = -1;
-
     private int _framesSinceTick;
     private double _msSinceTick;
     private List<double> _sessionFrameTimes = new();
     private StreamWriter? _log;
-    private DateTime _sessionStart;
+    private DateTime _captureStart;
     private int _emptyTicks;
+    private string? _error;
+
+    // game session
+    private int _gamePid;
+    private string _gameName = "";
+    private DateTime _gameStart;
+    private int _learnSeconds;
+    private double _targetCoverage;   // how much of its monitor the captured app's window covers while foreground
 
     public bool Enabled { get; set; }
     public bool LoggingEnabled { get; set; } = true;
     public double? CurrentFps { get; private set; }
     public string? CurrentProcess { get; private set; }
-    public string StateText { get; private set; } = "idle";
     public event EventHandler? Tick;
 
-    /// <summary>Time since capture attached to the current game, or null when idle.</summary>
-    public TimeSpan? Playtime
-    {
-        get
-        {
-            var start = _sessionStart;
-            return _proc != null ? DateTime.Now - start : null;
-        }
-    }
+    /// <summary>Process names treated as games; seeded from settings, grown by auto-learning.</summary>
+    public HashSet<string> KnownGames { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>A captured process held 25+ FPS for two minutes and is now considered a game.</summary>
+    public event Action<string>? GameLearned;
+
+    /// <summary>(game, session start, duration) — raised when the tracked game exits.</summary>
+    public event Action<string, DateTime, TimeSpan>? GameSessionEnded;
+
+    public string? CurrentGame => _gamePid != 0 ? _gameName : null;
+
+    /// <summary>Time since the tracked game was launched, or null when no game is tracked.</summary>
+    public TimeSpan? Playtime => _gamePid != 0 ? DateTime.Now - _gameStart : null;
+
+    public string StateText =>
+        !PresentMonAvailable ? "PresentMon missing"
+        : !Enabled ? "off"
+        : _error != null ? "error: " + _error
+        : _gamePid != 0 ? "game: " + _gameName
+        : _proc != null ? $"watching {_targetName} (not detected as a game)"
+        : "idle";
 
     public FpsService(string presentMonPath, string logDir)
     {
@@ -89,36 +153,122 @@ public sealed class FpsService : IDisposable
 
     public bool PresentMonAvailable => File.Exists(_presentMonPath);
 
+    // ---- foreground / game detection --------------------------------------
+
     private void CheckForeground()
     {
         if (!Enabled || !PresentMonAvailable)
         {
             if (_proc != null) StopCapture();
-            StateText = PresentMonAvailable ? "idle" : "PresentMon missing";
+            if (_gamePid != 0) EndGameSession();
             return;
         }
 
-        GetWindowThreadProcessId(GetForegroundWindow(), out uint fgPid);
+        // the tracked game may have exited without PresentMon noticing (e.g. it was never captured)
+        if (_gamePid != 0 && !IsRunning(_gamePid)) EndGameSession();
+
+        IntPtr hwnd = GetForegroundWindow();
+        GetWindowThreadProcessId(hwnd, out uint fgPid);
         int pid = (int)fgPid;
-        if (pid <= 4) return;
+        if (pid <= 4 || pid == Environment.ProcessId) return;
 
         string name;
         try { name = Process.GetProcessById(pid).ProcessName; }
         catch { return; }
 
+        _targetCoverage = pid == _targetPid ? WindowCoverage(hwnd, out _) : 0;
+
         if (IgnoredProcesses.Contains(name))
-            return; // keep the current capture while e.g. alt-tabbed to the desktop
+            return; // desktop, browser, Discord...: keep whatever we have
 
-        if (pid == _targetPid) return;
-
-        // require the same foreground pid twice in a row before switching (debounce)
+        // require the same foreground pid twice in a row before acting (debounce)
         if (pid == _candidatePid) _candidateSeen++;
         else { _candidatePid = pid; _candidateSeen = 1; }
         if (_candidateSeen < 2) return;
 
+        bool isGame = IsLikelyGame(pid, name, hwnd);
+
+        if (_gamePid != 0)
+        {
+            if (pid == _gamePid) return;
+            if (!isGame) return;            // alt-tabbed to some other app: the game session continues
+            EndGameSession();               // switched to a different game
+            StopCapture();
+            StartCapture(pid, name);
+            StartGameSession(pid, name);
+            return;
+        }
+
+        if (pid == _targetPid)
+        {
+            if (isGame) StartGameSession(pid, name); // e.g. a captured app just went fullscreen
+            return;
+        }
+
         StopCapture();
         StartCapture(pid, name);
+        if (isGame) StartGameSession(pid, name);
     }
+
+    private bool IsLikelyGame(int pid, string name, IntPtr hwnd)
+    {
+        if (KnownGames.Contains(name)) return true;
+        string? path = TryGetPath(pid);
+        if (path != null && GameLibraryPath.IsMatch(path)) return true;
+        double coverage = WindowCoverage(hwnd, out bool hasCaption);
+        return !hasCaption && coverage >= 0.85; // borderless or exclusive fullscreen
+    }
+
+    private static double WindowCoverage(IntPtr hwnd, out bool hasCaption)
+    {
+        hasCaption = true;
+        if (hwnd == IntPtr.Zero || !GetWindowRect(hwnd, out var r)) return 0;
+        IntPtr mon = MonitorFromWindow(hwnd, 2 /* MONITOR_DEFAULTTONEAREST */);
+        var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        if (mon == IntPtr.Zero || !GetMonitorInfo(mon, ref mi)) return 0;
+        long windowArea = Math.Max(0, r.Right - r.Left) * (long)Math.Max(0, r.Bottom - r.Top);
+        long monitorArea = (mi.rcMonitor.Right - mi.rcMonitor.Left) * (long)(mi.rcMonitor.Bottom - mi.rcMonitor.Top);
+        hasCaption = (GetWindowLong32(hwnd, GwlStyle) & WsCaption) == WsCaption;
+        return monitorArea == 0 ? 0 : Math.Min(1.0, (double)windowArea / monitorArea);
+    }
+
+    private static string? TryGetPath(int pid)
+    {
+        try { return Process.GetProcessById(pid).MainModule?.FileName; }
+        catch { return null; } // protected / anti-cheat processes refuse this; other signals still apply
+    }
+
+    private static bool IsRunning(int pid)
+    {
+        try { return !Process.GetProcessById(pid).HasExited; }
+        catch { return false; }
+    }
+
+    private static DateTime? TryStartTime(int pid)
+    {
+        try { return Process.GetProcessById(pid).StartTime; }
+        catch { return null; }
+    }
+
+    private void StartGameSession(int pid, string name)
+    {
+        _gamePid = pid;
+        _gameName = name;
+        _gameStart = TryStartTime(pid) ?? DateTime.Now; // playtime counts from launch, like Cortex
+        _learnSeconds = 0;
+    }
+
+    private void EndGameSession()
+    {
+        if (_gamePid == 0) return;
+        string name = _gameName;
+        DateTime start = _gameStart;
+        _gamePid = 0;
+        _gameName = "";
+        try { GameSessionEnded?.Invoke(name, start, DateTime.Now - start); } catch { }
+    }
+
+    // ---- PresentMon capture -------------------------------------------------
 
     private void StartCapture(int pid, string name)
     {
@@ -138,7 +288,7 @@ public sealed class FpsService : IDisposable
         try
         {
             proc = Process.Start(psi);
-            if (proc == null) { StateText = "failed to start PresentMon"; return; }
+            if (proc == null) { _error = "failed to start PresentMon"; return; }
             if (LoggingEnabled)
             {
                 Directory.CreateDirectory(_logDir);
@@ -149,7 +299,7 @@ public sealed class FpsService : IDisposable
         }
         catch (Exception ex)
         {
-            StateText = "error: " + ex.Message;
+            _error = ex.Message;
             return;
         }
 
@@ -161,10 +311,12 @@ public sealed class FpsService : IDisposable
             _framesSinceTick = 0;
             _msSinceTick = 0;
             _sessionFrameTimes = new List<double>();
-            _sessionStart = DateTime.Now;
+            _captureStart = DateTime.Now;
             _emptyTicks = 0;
+            _learnSeconds = 0;
             _log = log;
             _proc = proc;
+            _error = null;
         }
 
         proc.EnableRaisingEvents = true;
@@ -174,7 +326,6 @@ public sealed class FpsService : IDisposable
         proc.BeginErrorReadLine();
 
         CurrentProcess = name;
-        StateText = $"watching {name}";
     }
 
     private void StopCapture()
@@ -184,6 +335,7 @@ public sealed class FpsService : IDisposable
         List<double> frames;
         string name;
         DateTime started;
+        int stoppedPid;
 
         lock (_lock)
         {
@@ -191,7 +343,8 @@ public sealed class FpsService : IDisposable
             log = _log;
             frames = _sessionFrameTimes;
             name = _targetName;
-            started = _sessionStart;
+            started = _captureStart;
+            stoppedPid = _targetPid;
             _proc = null;
             _log = null;
             _sessionFrameTimes = new List<double>();
@@ -202,7 +355,9 @@ public sealed class FpsService : IDisposable
 
         CurrentFps = null;
         CurrentProcess = null;
-        if (StateText.StartsWith("watching")) StateText = "idle";
+
+        // the game closed (PresentMon exits with it): close the session too
+        if (_gamePid != 0 && _gamePid == stoppedPid) EndGameSession();
 
         // everything slow happens outside the lock
         if (proc != null)
@@ -267,6 +422,7 @@ public sealed class FpsService : IDisposable
     {
         StreamWriter? log = null;
         string? logLine = null;
+        string? learned = null;
         lock (_lock)
         {
             if (_proc == null)
@@ -288,10 +444,27 @@ public sealed class FpsService : IDisposable
             }
             _framesSinceTick = 0;
             _msSinceTick = 0;
+
+            // auto-learn: a big, foreground window holding game-like frame rates for two minutes is a game
+            if (_proc != null && _gamePid == 0)
+            {
+                if (CurrentFps >= LearnMinFps && _targetCoverage >= 0.5) _learnSeconds++;
+                else _learnSeconds = Math.Max(0, _learnSeconds - 2);
+                if (_learnSeconds >= LearnSecondsNeeded && !KnownGames.Contains(_targetName))
+                {
+                    KnownGames.Add(_targetName);
+                    learned = _targetName;
+                    StartGameSession(_targetPid, _targetName);
+                }
+            }
         }
         if (log != null && logLine != null)
         {
             try { log.WriteLine(logLine); } catch { }
+        }
+        if (learned != null)
+        {
+            try { GameLearned?.Invoke(learned); } catch { }
         }
         Tick?.Invoke(this, EventArgs.Empty);
     }
@@ -301,5 +474,6 @@ public sealed class FpsService : IDisposable
         _foregroundTimer.Dispose();
         _aggregateTimer.Dispose();
         StopCapture();
+        EndGameSession();
     }
 }

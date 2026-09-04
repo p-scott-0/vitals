@@ -60,7 +60,7 @@ public partial class App : Application
         ("board.vrm", "BOARD", "VRM"), ("board.system", "BOARD", "Sys"), ("ssd.temp", "BOARD", "SSD"),
         ("fan.cpu", "FANS", "CPU"), ("fan.pump", "FANS", "Pump"), ("fan.case", "FANS", "Case"), ("fan.gpu", "FANS", "GPU"),
         ("net.down", "NET", "↓"), ("net.up", "NET", "↑"),
-        ("playtime", "PLAY", "Session"),
+        ("game.name", "PLAY", "Game"), ("playtime", "PLAY", "Session"),
         ("time", "TIME", "Clock"),
     ];
 
@@ -145,6 +145,9 @@ public partial class App : Application
             var f = Fps.CurrentFps;
             if (f.HasValue) FpsHistory.Add(DateTime.UtcNow, f.Value);
         };
+        foreach (var g in Settings.KnownGames) Fps.KnownGames.Add(g);
+        Fps.GameLearned += name => Dispatcher.BeginInvoke(() => AddKnownGame(name));
+        Fps.GameSessionEnded += AppendPlaytimeLog;
 
         BuildTray();
 
@@ -236,11 +239,15 @@ public partial class App : Application
                 catch { text = DateTime.Now.ToString("HH:mm"); }
                 return new OverlayValue(group, label, text, null);
             }
+            case "game.name":
+                // PLAY entries disappear from the overlay when no game is tracked
+                return Fps.CurrentGame is { } game ? new OverlayValue(group, label, game, null) : null;
             case "playtime":
             {
                 var t = Fps.Playtime;
-                return new OverlayValue(group, label,
-                    t.HasValue ? $"{(int)t.Value.TotalHours}:{t.Value.Minutes:00}:{t.Value.Seconds:00}" : "--", null);
+                return t.HasValue
+                    ? new OverlayValue(group, label, $"{(int)t.Value.TotalHours}:{t.Value.Minutes:00}:{t.Value.Seconds:00}", null)
+                    : null;
             }
             case "net.down":
                 return new OverlayValue(group, label, NetMonitor.Format(Net.DownBytesPerSec), null);
@@ -437,6 +444,46 @@ public partial class App : Application
     public void SaveSettings()
     {
         try { SettingsStore.Save(Settings); } catch { }
+    }
+
+    // ---- games ---------------------------------------------------------------
+
+    public void AddKnownGame(string name)
+    {
+        name = name.Trim();
+        if (name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) name = name[..^4];
+        if (name.Length == 0) return;
+        if (!Settings.KnownGames.Contains(name, StringComparer.OrdinalIgnoreCase))
+        {
+            Settings.KnownGames.Add(name);
+            Settings.KnownGames.Sort(StringComparer.OrdinalIgnoreCase);
+            SaveSettings();
+        }
+        Fps.KnownGames.Add(name);
+        _main?.RefreshKnownGames();
+    }
+
+    public void RemoveKnownGame(string name)
+    {
+        Settings.KnownGames.RemoveAll(g => string.Equals(g, name, StringComparison.OrdinalIgnoreCase));
+        Fps.KnownGames.Remove(name);
+        SaveSettings();
+        _main?.RefreshKnownGames();
+    }
+
+    /// <summary>One line per game session in %APPDATA%\Vitals\logs\playtime.csv.</summary>
+    private static void AppendPlaytimeLog(string game, DateTime start, TimeSpan duration)
+    {
+        try
+        {
+            string dir = Path.Combine(SettingsStore.Dir, "logs");
+            Directory.CreateDirectory(dir);
+            string file = Path.Combine(dir, "playtime.csv");
+            if (!File.Exists(file)) File.WriteAllText(file, "start,end,game,minutes\r\n");
+            File.AppendAllText(file,
+                $"{start:yyyy-MM-dd HH:mm:ss},{start + duration:yyyy-MM-dd HH:mm:ss},{game},{duration.TotalMinutes:0.0}\r\n");
+        }
+        catch { }
     }
 
     public void ExitApp()

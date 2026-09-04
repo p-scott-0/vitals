@@ -197,6 +197,17 @@
                     <TextBlock Text="Fans — tick to show, type to rename" Style="{StaticResource SettingLabel}"/>
                     <StackPanel x:Name="FanRows"/>
 
+                    <TextBlock Text="GAMES" Style="{StaticResource CardTitle}" Margin="2,18,0,8"/>
+                    <TextBlock FontSize="10.5" Foreground="{StaticResource TextLoBrush}" TextWrapping="Wrap"
+                               Text="A game is detected when its window is borderless or fullscreen, it lives in a game-library folder (Steam, Epic, GOG, Xbox, Ubisoft, EA…), or it holds 25+ FPS for two minutes — which adds it to this list for next time. Once detected, alt-tabbing changes nothing: FPS capture and playtime stay with the game until it exits. Sessions are logged to %APPDATA%\Vitals\logs\playtime.csv."/>
+                    <TextBlock Text="Known games — click ✕ to forget one" Style="{StaticResource SettingLabel}"/>
+                    <WrapPanel x:Name="KnownGamesPanel"/>
+                    <DockPanel Margin="0,4,0,0" LastChildFill="False">
+                        <TextBox x:Name="AddGameBox" Width="210" Style="{StaticResource SettingBox}"
+                                 ToolTip="Process name, e.g. Sandustry or Sandustry.exe" KeyDown="OnAddGameKey"/>
+                        <Button Content="Add" Style="{StaticResource ChipButtonB}" Click="OnAddGame" Margin="6,0,0,0"/>
+                    </DockPanel>
+
                     <TextBlock Text="OVERLAY" Style="{StaticResource CardTitle}" Margin="2,18,0,8"/>
                     <CheckBox x:Name="OverlayCheck" Content="Overlay enabled" Style="{StaticResource SettingCheck}"
                               Checked="OnOverlayCheck" Unchecked="OnOverlayCheck"/>

@@ -172,7 +172,10 @@ public partial class MainWindow : Window
             : _app.Hub.LastError is { } err
                 ? "sensor error: " + err
                 : $"{_app.Hub.Sensors.Count} sensors • polling {(int)_app.Hub.PollInterval.TotalSeconds}s{storageNote}";
-        StatusMid.Text = "FPS: " + _app.Fps.StateText;
+        var fps = _app.Fps;
+        StatusMid.Text = fps.CurrentGame is { } game
+            ? $"game: {game} · {FmtSpan(fps.Playtime)}" + (fps.CurrentFps is { } f ? $" · {Math.Round(f)} fps" : "")
+            : "FPS: " + fps.StateText;
         StatusRight.Text = _app.Settings.OverlayEnabled
             ? (_app.Settings.OverlayLocked ? "overlay on • click-through" : "overlay on • draggable")
             : "overlay off";
@@ -182,6 +185,66 @@ public partial class MainWindow : Window
 
     private static string Fmt(double? v, string suffix) =>
         v.HasValue ? Math.Round(v.Value) + suffix : "--";
+
+    private static string FmtSpan(TimeSpan? t) =>
+        t.HasValue ? $"{(int)t.Value.TotalHours}:{t.Value.Minutes:00}:{t.Value.Seconds:00}" : "--";
+
+    // ---- known games --------------------------------------------------------
+
+    public void RefreshKnownGames()
+    {
+        KnownGamesPanel.Children.Clear();
+        foreach (string name in _app.Settings.KnownGames)
+        {
+            string game = name;
+            var remove = new TextBlock
+            {
+                Text = "✕",
+                Foreground = UiBrushes.TextLo,
+                FontSize = 11,
+                Margin = new Thickness(8, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                Cursor = Cursors.Hand,
+                ToolTip = "Forget " + game,
+            };
+            remove.MouseLeftButtonDown += (_, _) => _app.RemoveKnownGame(game);
+            var chip = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(0x12, 0x16, 0x20)),
+                BorderBrush = (Brush)FindResource("CardBorderBrush"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(7),
+                Padding = new Thickness(9, 3, 7, 3),
+                Margin = new Thickness(0, 0, 6, 6),
+                Child = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Children =
+                    {
+                        new TextBlock { Text = game, Foreground = UiBrushes.TextHi, FontSize = 12, VerticalAlignment = VerticalAlignment.Center },
+                        remove,
+                    },
+                },
+            };
+            KnownGamesPanel.Children.Add(chip);
+        }
+        if (KnownGamesPanel.Children.Count == 0)
+            KnownGamesPanel.Children.Add(new TextBlock { Text = "none yet", Foreground = UiBrushes.TextLo, FontSize = 11 });
+    }
+
+    private void OnAddGame(object sender, RoutedEventArgs e)
+    {
+        _app.AddKnownGame(AddGameBox.Text);
+        AddGameBox.Clear();
+    }
+
+    private void OnAddGameKey(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        _app.AddKnownGame(AddGameBox.Text);
+        AddGameBox.Clear();
+        e.Handled = true;
+    }
 
     // ---- fans -------------------------------------------------------------
 
@@ -398,6 +461,7 @@ public partial class MainWindow : Window
 
         StartupCheck.IsChecked = App.StartupTaskExists();
         RebuildFanRows();
+        RefreshKnownGames();
         ApplyChartWindow();
     }
 

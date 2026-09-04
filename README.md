@@ -25,7 +25,7 @@ Tick **Start with Windows** in Settings to have it launch at logon without a UAC
 - **System tiles** — CPU/GPU load, GPU power, RAM, system temp, SSD temp.
 - **History charts** — temperatures, fan speeds and FPS over a configurable 1–60 minute window.
 - **Overlay** — Razer Cortex–style strip (or vertical stack) grouping metrics under FPS / CPU / GPU / RAM / BOARD / FANS / NET / PLAY / TIME. Configurable metrics, fan readout (RPM, duty %, or both), clock format, header/value/background colours, background opacity, scale (drag the corner), and position (drag it). Click-through when locked. Renders over borderless/windowed fullscreen games.
-- **FPS** — via Intel [PresentMon](https://github.com/GameTechDev/PresentMon) (passive ETW frame telemetry, no game injection). Auto-attaches to the foreground game, shows live FPS, and logs each session (per-second FPS, average, 1 % lows) to `%APPDATA%\Vitals\logs\`.
+- **FPS & playtime** — via Intel [PresentMon](https://github.com/GameTechDev/PresentMon) (passive ETW frame telemetry, no game injection). A game is detected when its window is borderless/fullscreen, it lives in a game-library folder (Steam, Epic, GOG, Xbox, Ubisoft, EA…), or it holds 25+ FPS for two minutes — which remembers it for next time; there's also a manual list in Settings. Once detected, alt-tabbing changes nothing: FPS capture and playtime (counted from launch) stay with the game until it exits. Each FPS session (per-second FPS, average, 1 % lows) and each play session are logged under `%APPDATA%\Vitals\logs\`.
 
 Settings live in `%APPDATA%\Vitals\settings.json`.
 

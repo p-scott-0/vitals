@@ -36,6 +36,10 @@ public sealed class VitalsSettings
     /// <summary>How FANS group entries read on the overlay: "rpm", "pct" (duty %), or "both".</summary>
     public string OverlayFanMode { get; set; } = "rpm";
 
+    // games
+    /// <summary>Process names treated as games (auto-learned from sustained FPS, or added by hand).</summary>
+    public List<string> KnownGames { get; set; } = new();
+
     /// <summary>Metric roles shown on the overlay (grouped automatically by prefix).</summary>
     public List<string> OverlayMetrics { get; set; } =
         ["fps", "cpu.temp", "cpu.load", "gpu.temp", "gpu.load", "ram.load", "net.down", "time"];
