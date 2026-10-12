@@ -440,20 +440,7 @@ public partial class MainWindow : Window
             () => _app.Settings.TimeFormat,
             v => { _app.Settings.TimeFormat = v; _app.SaveSettings(); _app.RefreshOverlayConfig(); });
 
-        foreach (var m in App.MetricCatalog)
-        {
-            var cb = new CheckBox
-            {
-                Content = m.Group + " · " + m.Label,
-                Tag = m.Role,
-                Width = 175,
-                IsChecked = _app.Settings.OverlayMetrics.Contains(m.Role),
-                Style = (Style)FindResource("SettingCheck"),
-            };
-            cb.Checked += OnMetricToggled;
-            cb.Unchecked += OnMetricToggled;
-            MetricChecks.Children.Add(cb);
-        }
+        BuildLayoutPanel();
 
         BuildColourRow("Header text", () => _app.Settings.OverlayHeaderColor, v => _app.Settings.OverlayHeaderColor = v, TextPresets);
         BuildColourRow("Value text", () => _app.Settings.OverlayValueColor, v => _app.Settings.OverlayValueColor = v, TextPresets);
@@ -586,12 +573,115 @@ public partial class MainWindow : Window
 
     private bool Suppressed => _init || _syncing;
 
+    // ---- overlay layout editor (drag-to-reorder groups and metrics) -----------
+
+    private sealed record GroupCard(string Group, WrapPanel Items);
+    private sealed record MetricChip(string Role, CheckBox Box);
+    private ReorderDrag? _groupDrag;
+
+    private void BuildLayoutPanel()
+    {
+        LayoutPanel.Children.Clear();
+        _groupDrag = ReorderDrag.For(LayoutPanel, readingOrder: false, CommitOverlayLayout);
+
+        foreach (var (group, roles) in _app.OverlayLayout())
+        {
+            var grip = new TextBlock
+            {
+                Text = "⠿",
+                Foreground = UiBrushes.TextLo,
+                FontSize = 14,
+                Margin = new Thickness(0, 0, 8, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            var title = new TextBlock
+            {
+                Text = group,
+                Foreground = UiBrushes.Accent,
+                FontWeight = FontWeights.Bold,
+                FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            var header = new DockPanel { Background = Brushes.Transparent, LastChildFill = true, Children = { grip, title } };
+
+            var items = new WrapPanel { Margin = new Thickness(0, 5, 0, 0) };
+            var itemDrag = ReorderDrag.For(items, readingOrder: true, CommitOverlayLayout);
+            foreach (string role in roles)
+                items.Children.Add(BuildMetricChip(role, itemDrag));
+
+            var card = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(0x12, 0x16, 0x20)),
+                BorderBrush = (Brush)FindResource("CardBorderBrush"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(9, 6, 9, 2),
+                Margin = new Thickness(0, 0, 0, 6),
+                Child = new StackPanel { Children = { header, items } },
+                Tag = new GroupCard(group, items),
+            };
+            _groupDrag.Handle(header, card);
+            LayoutPanel.Children.Add(card);
+        }
+    }
+
+    private Border BuildMetricChip(string role, ReorderDrag drag)
+    {
+        var entry = App.MetricCatalog.First(m => m.Role == role);
+        var grip = new TextBlock
+        {
+            Text = "⠿",
+            Foreground = UiBrushes.TextLo,
+            Background = Brushes.Transparent,
+            FontSize = 12,
+            Margin = new Thickness(2, 0, 5, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var box = new CheckBox
+        {
+            Content = entry.Label,
+            IsChecked = _app.Settings.OverlayMetrics.Contains(role),
+            Style = (Style)FindResource("SettingCheck"),
+            Margin = new Thickness(0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        box.Checked += OnMetricToggled;
+        box.Unchecked += OnMetricToggled;
+        var chip = new Border
+        {
+            Background = (Brush)FindResource("InputBrush"),
+            BorderBrush = (Brush)FindResource("CardBorderBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(3, 1, 8, 1),
+            Margin = new Thickness(0, 0, 6, 5),
+            Child = new StackPanel { Orientation = Orientation.Horizontal, Children = { grip, box } },
+            Tag = new MetricChip(role, box),
+        };
+        drag.Handle(grip, chip);
+        return chip;
+    }
+
+    private IEnumerable<MetricChip> MetricChipsInOrder() =>
+        LayoutPanel.Children.OfType<Border>()
+            .Select(c => (GroupCard)c.Tag)
+            .SelectMany(gc => gc.Items.Children.OfType<Border>().Select(b => (MetricChip)b.Tag));
+
+    private void CommitOverlayLayout()
+    {
+        var groups = LayoutPanel.Children.OfType<Border>()
+            .Select(c => (GroupCard)c.Tag)
+            .Select(gc => (Group: gc.Group, Roles: gc.Items.Children.OfType<Border>().Select(b => ((MetricChip)b.Tag).Role).ToList()))
+            .ToList();
+        _app.SetOverlayLayout(groups);
+    }
+
     private void OnMetricToggled(object sender, RoutedEventArgs e)
     {
         if (Suppressed) return;
-        _app.Settings.OverlayMetrics = MetricChecks.Children.OfType<CheckBox>()
-            .Where(c => c.IsChecked == true)
-            .Select(c => (string)c.Tag)
+        _app.Settings.OverlayMetrics = MetricChipsInOrder()
+            .Where(c => c.Box.IsChecked == true)
+            .Select(c => c.Role)
             .ToList();
         _app.SaveSettings();
         _app.RefreshOverlayConfig();

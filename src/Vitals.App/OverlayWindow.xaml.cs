@@ -33,7 +33,6 @@ public partial class OverlayWindow : Window
         public readonly List<(string Role, TextBlock Tb)> Items = new();
     }
 
-    private static readonly string[] GroupOrder = ["FPS", "CPU", "GPU", "RAM", "BOARD", "FANS", "NET", "PLAY", "TIME"];
     private static readonly HashSet<string> LabelledGroups = ["BOARD", "FANS", "NET"];
 
     private readonly App _app;
@@ -114,12 +113,10 @@ public partial class OverlayWindow : Window
         bool horizontal = _app.Settings.OverlayHorizontal;
         Groups.Orientation = horizontal ? Orientation.Horizontal : Orientation.Vertical;
 
-        foreach (string groupKey in GroupOrder)
+        // group and metric order come from the user-arranged layout (Settings > Overlay)
+        foreach (var (groupKey, allRoles) in _app.OverlayLayout())
         {
-            var roles = App.MetricCatalog
-                .Where(m => m.Group == groupKey && metrics.Contains(m.Role))
-                .Select(m => m.Role)
-                .ToList();
+            var roles = allRoles.Where(metrics.Contains).ToList();
             if (roles.Count == 0) continue;
 
             var ui = new GroupUi { Key = groupKey };

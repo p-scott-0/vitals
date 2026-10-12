@@ -217,8 +217,9 @@
                     <StackPanel x:Name="LayoutChips" Orientation="Horizontal"/>
                     <TextBlock Text="Fan readout" Style="{StaticResource SettingLabel}"/>
                     <StackPanel x:Name="FanModeChips" Orientation="Horizontal"/>
-                    <TextBlock Text="Metrics" Style="{StaticResource SettingLabel}"/>
-                    <WrapPanel x:Name="MetricChecks"/>
+                    <TextBlock Text="Groups &amp; metrics — tick to show; drag ⠿ to reorder (groups up/down, metrics within a group)"
+                               Style="{StaticResource SettingLabel}" TextWrapping="Wrap"/>
+                    <StackPanel x:Name="LayoutPanel"/>
                     <TextBlock Text="Clock format" Style="{StaticResource SettingLabel}"/>
                     <StackPanel x:Name="TimeChips" Orientation="Horizontal"/>
                     <TextBlock Text="Colours (hex, or click a swatch)" Style="{StaticResource SettingLabel}"/>

@@ -40,6 +40,9 @@ public sealed class VitalsSettings
     /// <summary>Process names treated as games (auto-learned from sustained FPS, or added by hand).</summary>
     public List<string> KnownGames { get; set; } = new();
 
+    /// <summary>Display order of every overlay role (enabled or not); groups follow the order of their first role. Empty = catalog order.</summary>
+    public List<string> OverlayOrder { get; set; } = new();
+
     /// <summary>Metric roles shown on the overlay (grouped automatically by prefix).</summary>
     public List<string> OverlayMetrics { get; set; } =
         ["fps", "cpu.temp", "cpu.load", "gpu.temp", "gpu.load", "ram.load", "net.down", "time"];

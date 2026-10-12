@@ -55,7 +55,7 @@ public partial class App : Application
     [
         ("fps", "FPS", "FPS"),
         ("cpu.temp", "CPU", "Temp"), ("cpu.load", "CPU", "Load"), ("cpu.clock", "CPU", "Clock"),
-        ("gpu.temp", "GPU", "Temp"), ("gpu.hotspot", "GPU", "VRAM temp"), ("gpu.load", "GPU", "Load"), ("gpu.power", "GPU", "Power"),
+        ("gpu.temp", "GPU", "Temp"), ("gpu.hotspot", "GPU", "VRAM"), ("gpu.load", "GPU", "Load"), ("gpu.power", "GPU", "Power"),
         ("ram.load", "RAM", "Used"),
         ("board.vrm", "BOARD", "VRM"), ("board.system", "BOARD", "Sys"), ("ssd.temp", "BOARD", "SSD"),
         ("fan.cpu", "FANS", "CPU"), ("fan.pump", "FANS", "Pump"), ("fan.case", "FANS", "Case"), ("fan.gpu", "FANS", "GPU"),
@@ -210,6 +210,53 @@ public partial class App : Application
             // the FPS service reports "PresentMon missing" if this failed
         }
         return target;
+    }
+
+    // ---- overlay layout: group + metric order ----------------------------------
+
+    /// <summary>Groups in display order, each with all of its roles (enabled or not) in display order.</summary>
+    public List<(string Group, List<string> Roles)> OverlayLayout()
+    {
+        var order = NormalizedOverlayOrder();
+        var groups = new List<(string Group, List<string> Roles)>();
+        foreach (string role in order)
+        {
+            string group = MetricCatalog.First(m => m.Role == role).Group;
+            int gi = groups.FindIndex(g => g.Group == group);
+            if (gi < 0)
+            {
+                groups.Add((group, new List<string>()));
+                gi = groups.Count - 1;
+            }
+            groups[gi].Roles.Add(role);
+        }
+        return groups;
+    }
+
+    /// <summary>Persist a new group/metric order (from the settings drag UI) and re-lay the overlay out.</summary>
+    public void SetOverlayLayout(IEnumerable<(string Group, List<string> Roles)> groups)
+    {
+        Settings.OverlayOrder = groups.SelectMany(g => g.Roles).ToList();
+        NormalizedOverlayOrder();
+        SaveSettings();
+        RefreshOverlayConfig();
+    }
+
+    /// <summary>Saved order with unknown roles dropped and roles new to this version slotted in beside their group.</summary>
+    private List<string> NormalizedOverlayOrder()
+    {
+        var known = new HashSet<string>(MetricCatalog.Select(m => m.Role));
+        var order = Settings.OverlayOrder.Where(known.Contains).Distinct().ToList();
+        bool changed = order.Count != Settings.OverlayOrder.Count;
+        foreach (var m in MetricCatalog)
+        {
+            if (order.Contains(m.Role)) continue;
+            int last = order.FindLastIndex(r => MetricCatalog.First(c => c.Role == r).Group == m.Group);
+            order.Insert(last >= 0 ? last + 1 : order.Count, m.Role);
+            changed = true;
+        }
+        if (changed) Settings.OverlayOrder = order;
+        return order;
     }
 
     // ---- metric resolution ------------------------------------------------
