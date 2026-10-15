@@ -25,6 +25,33 @@ public partial class OverlayWindow : Window
     [DllImport("user32.dll", EntryPoint = "SetWindowLong")]
     private static extern int SetWindowLong32(IntPtr hWnd, int index, int value);
 
+    // --- staying on top of games that make themselves topmost (Minecraft, most borderless titles) ---
+
+    private const int WsExTopmost = 0x00000008;
+    private const uint SwpNoSize = 0x0001, SwpNoMove = 0x0002, SwpNoActivate = 0x0010;
+    private const uint EventSystemForeground = 0x0003;
+    private const uint EventSystemMinimizeEnd = 0x0017;
+    private static readonly IntPtr HwndTopmost = new(-1);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    private delegate void WinEventDelegate(IntPtr hook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint thread, uint time);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SetWinEventHook(uint eventMin, uint eventMax, IntPtr hmod, WinEventDelegate proc, uint idProcess, uint idThread, uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern bool UnhookWinEvent(IntPtr hook);
+
+    private WinEventDelegate? _winEventProc; // kept alive for the hook's lifetime
+    private IntPtr _winEventHook;
+    private System.Windows.Threading.DispatcherTimer? _reassertTimer;
+    private int _reassertTicksLeft;
+
     private sealed class GroupUi
     {
         public string Key = "";
@@ -55,6 +82,12 @@ public partial class OverlayWindow : Window
         {
             _hwnd = new WindowInteropHelper(this).Handle;
             ApplyClickThrough();
+            InstallForegroundHook();
+        };
+        Closed += (_, _) =>
+        {
+            if (_winEventHook != IntPtr.Zero) UnhookWinEvent(_winEventHook);
+            _winEventHook = IntPtr.Zero;
         };
         Root.MouseLeftButtonDown += OnDragStart;
         Grip.MouseLeftButtonDown += OnGripDown;
@@ -227,6 +260,53 @@ public partial class OverlayWindow : Window
             Left = s.OverlayX;
             Top = s.OverlayY;
         }
+    }
+
+    // ---- stay on top -----------------------------------------------------------
+    //
+    // Windows keeps one "topmost" band of windows, ordered by whoever was raised last. Games
+    // that go fullscreen or borderless usually put themselves in that band (GLFW/Minecraft,
+    // Unity, Unreal...), and since the overlay never activates, each such game lands above it.
+    // So: whenever the foreground window changes (or a window restores from minimised), raise
+    // the overlay again, a few times over the next second in case the game raises itself late,
+    // and once a second as long as a topmost app is in front. SWP_NOACTIVATE keeps focus where
+    // it is, so the game never notices.
+
+    private void InstallForegroundHook()
+    {
+        _winEventProc = OnWinEvent;
+        _winEventHook = SetWinEventHook(EventSystemForeground, EventSystemMinimizeEnd, IntPtr.Zero, _winEventProc, 0, 0, 0);
+        _reassertTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        _reassertTimer.Tick += (_, _) =>
+        {
+            AssertTopmost();
+            if (--_reassertTicksLeft <= 0) _reassertTimer.Stop();
+        };
+    }
+
+    private void OnWinEvent(IntPtr hook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint thread, uint time)
+    {
+        if (eventType != EventSystemForeground && eventType != EventSystemMinimizeEnd) return;
+        if (hwnd == _hwnd || !IsVisible) return;
+        AssertTopmost();
+        _reassertTicksLeft = 4;
+        _reassertTimer?.Start();
+    }
+
+    /// <summary>Raise the overlay to the top of the topmost band without taking focus.</summary>
+    public void AssertTopmost()
+    {
+        if (_hwnd == IntPtr.Zero || !IsVisible) return;
+        SetWindowPos(_hwnd, HwndTopmost, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate);
+    }
+
+    /// <summary>Once-a-second safety net: only re-raises while a topmost app (a fullscreen game) is in front.</summary>
+    public void KeepOnTopTick()
+    {
+        if (_hwnd == IntPtr.Zero || !IsVisible) return;
+        IntPtr fg = GetForegroundWindow();
+        if (fg == IntPtr.Zero || fg == _hwnd) return;
+        if ((GetWindowLong32(fg, GwlExStyle) & WsExTopmost) != 0) AssertTopmost();
     }
 
     public void ApplyClickThrough()

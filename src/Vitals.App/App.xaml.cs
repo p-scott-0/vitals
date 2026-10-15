@@ -161,7 +161,11 @@ public partial class App : Application
         }
 
         _overlayTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-        _overlayTimer.Tick += (_, _) => _overlay?.UpdateValues(ResolveMetric);
+        _overlayTimer.Tick += (_, _) =>
+        {
+            _overlay?.UpdateValues(ResolveMetric);
+            _overlay?.KeepOnTopTick();
+        };
         _overlayTimer.Start();
     }
 
@@ -439,6 +443,7 @@ public partial class App : Application
         _overlay ??= new OverlayWindow(this);
         _overlay.Rebuild(Settings.OverlayMetrics);
         _overlay.Show();
+        _overlay.AssertTopmost();
         _overlay.UpdateValues(ResolveMetric);
         SyncUi();
         SaveSettings();
